@@ -151,6 +151,39 @@ describe('CloudflareDOStore', () => {
       const loaded = await seneca.entity('foo/bar').load$(ent.id)
       expect(loaded.x).toEqual(2)
     })
+
+    test('concurrent saves produce unique ids and intact data', async () => {
+      const N = 20
+
+      // Fire N saves at the same time — simulates multiple requests hitting
+      // the DO simultaneously. In a real DO, these would be serialized by the
+      // runtime; here the mock verifies our promise handling stays correct.
+      const saved = await Promise.all(
+        Array.from({ length: N }, (_, i) =>
+          seneca.entity('race/item').data$({ n: i, label: `item-${i}` }).save$(),
+        ),
+      )
+
+      // Every save must have returned a unique id.
+      const ids = saved.map((e: any) => e.id)
+      expect(new Set(ids).size).toEqual(N)
+
+      // Re-load every entity concurrently and verify the payload is intact.
+      const loaded = await Promise.all(
+        saved.map((e: any) => seneca.entity('race/item').load$(e.id)),
+      )
+
+      for (let i = 0; i < N; i++) {
+        expect(loaded[i]).not.toBeNull()
+        expect(loaded[i].id).toEqual(saved[i].id)
+        expect(loaded[i].n).toEqual(saved[i].n)
+        expect(loaded[i].label).toEqual(saved[i].label)
+      }
+
+      // The total count in storage must equal N — no writes were lost or doubled.
+      const all = await seneca.entity('race/item').list$({ limit$: N + 1 })
+      expect(all.length).toEqual(N)
+    })
   })
 })
 
