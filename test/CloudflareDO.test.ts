@@ -1,248 +1,194 @@
 /* Copyright © 2024 Seneca Project Contributors, MIT License. */
 
-require('dotenv').config({ path: '.env.local' })
-// console.log(process.env) // remove this
-
-
 import Seneca from 'seneca'
-// import SenecaMsgTest from 'seneca-msg-test'
-// import { Maintain } from '@seneca/maintain'
 
-import OpensearchStoreDoc from '../src/OpensearchStoreDoc'
-import OpensearchStore from '../src/OpensearchStore'
+import CloudflareDOStoreDoc from '../src/CloudflareDOStoreDoc'
+import CloudflareDOStore from '../src/CloudflareDOStore'
 
-
-
-describe('OpensearchStore', () => {
+describe('CloudflareDOStore', () => {
   test('load-plugin', async () => {
-    expect(OpensearchStore).toBeDefined()
-    expect(OpensearchStoreDoc).toBeDefined()
+    expect(CloudflareDOStore).toBeDefined()
+    expect(CloudflareDOStoreDoc).toBeDefined()
 
-    const seneca = Seneca({ legacy: false })
-      .test()
-      .use('promisify')
-      .use('entity')
-      .use(OpensearchStore)
+    const seneca = makeSeneca()
     await seneca.ready()
 
-    expect(seneca.export('OpensearchStore/native')).toBeDefined()
+    expect(seneca.export('CloudflareDOStore/native')).toBeDefined()
   })
 
+  test('utils.resolveKeyPrefix', () => {
+    const { resolveKeyPrefix } = CloudflareDOStore['utils']
+    const s = Seneca({ legacy: false }).test().use('entity')
 
-  test('utils.resolveIndex', () => {
-    const utils = OpensearchStore['utils']
-    const resolveIndex = utils.resolveIndex
-    const seneca = makeSeneca()
-    const ent0 = seneca.make('foo')
-    const ent1 = seneca.make('foo/bar')
+    expect(resolveKeyPrefix(s.make('foo'), { prefix: '', suffix: '' })).toEqual(
+      'foo',
+    )
+    expect(
+      resolveKeyPrefix(s.make('foo/bar'), { prefix: 'p', suffix: '' }),
+    ).toEqual('p/foo/bar')
+    expect(
+      resolveKeyPrefix(s.make('foo/bar'), {
+        prefix: '',
+        suffix: 's',
+        map: { '-/foo/bar': 'custom' },
+      }),
+    ).toEqual('custom')
+  })
 
-    expect(resolveIndex(ent0, { index: {} })).toEqual('foo')
-    expect(resolveIndex(ent0, { index: { exact: 'qaz' } })).toEqual('qaz')
+  describe('crud', () => {
+    let seneca: any
 
-    expect(resolveIndex(ent1, { index: {} })).toEqual('foo_bar')
-    expect(resolveIndex(ent1, { index: { prefix: 'p0', suffix: 's0' } })).toEqual('p0_foo_bar_s0')
-    expect(resolveIndex(ent1, {
-      index: { map: { '-/foo/bar': 'FOOBAR' }, prefix: 'p0', suffix: 's0' }
-    }))
-      .toEqual('FOOBAR')
-  }, 22222)
-
-
-  test('insert-remove', async () => {
-    const seneca = await makeSeneca()
-    await seneca.ready()
-
-
-    // no query params means no results
-    const list0 = await seneca.entity('foo/chunk').list$()
-    expect(0 === list0.length)
-
-    const list1 = await seneca.entity('foo/chunk').list$({ test: 'insert-remove' })
-    // console.log(list1)
-
-    let ent0: any
-
-    if (0 === list1.length) {
-      ent0 = await seneca.entity('foo/chunk')
-        .make$()
-        .data$({
-          test: 'insert-remove',
-          text: 't01',
-          vector: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7],
-          directive$: { vector$: true },
-        })
-        .save$()
-      expect(ent0).toMatchObject({ test: 'insert-remove' })
-      await new Promise((r) => setTimeout(r, 2222))
-    }
-    else {
-      ent0 = list1[0]
-    }
-
-    await seneca.entity('foo/chunk').remove$(ent0.id)
-
-    await new Promise((r) => setTimeout(r, 2222))
-
-    const list2 = await seneca.entity('foo/chunk').list$({ test: 'insert-remove' })
-    // console.log(list2)
-    expect(list2.filter((n: any) => n.id === ent0.id)).toEqual([])
-  }, 22222)
-
-
-  test('vector-cat', async () => {
-    const seneca = await makeSeneca()
-    await seneca.ready()
-
-    // const list0 = await seneca.entity('foo/chunk').list$({ test: 'vector-cat' })
-    // console.log('list0', list0)
-
-    // NOT AVAILABLE ON AWS
-    // await seneca.entity('foo/chunk').remove$({ all$: true, test: 'vector-cat' })
-
-    const list1 = await seneca.entity('foo/chunk').list$({ test: 'vector-cat' })
-    // console.log('list1', list1)
-
-    /*
-    for (let i = 0; i < list1.length; i++) {
-      await list1[i].remove$()
-    }
-
-    await new Promise((r) => setTimeout(r, 2222))
-
-    const list1r = await seneca.entity('foo/chunk').list$({ test: 'vector-cat' })
-    // console.log('list1r', list1r)
-    */
-
-    if (!list1.find((n: any) => 'code0' === n.code)) {
-      await seneca.entity('foo/chunk')
-        .make$()
-        .data$({
-          code: 'code0',
-          test: 'vector-cat',
-          text: 't01',
-          vector: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1],
-          directive$: { vector$: true },
-        })
-        .save$()
-    }
-
-    if (!list1.find((n: any) => 'code1' === n.code)) {
-      await seneca.entity('foo/chunk')
-        .make$()
-        .data$({
-          code: 'code1',
-          test: 'vector-cat',
-          text: 't01',
-          vector: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1],
-          directive$: { vector$: true },
-        })
-        .save$()
-    }
-
-    await new Promise((r) => setTimeout(r, 2222))
-
-    const list2 = await seneca.entity('foo/chunk').list$({
-      directive$: { vector$: { k: 2 } },
-      vector: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1],
+    beforeEach(async () => {
+      seneca = makeSeneca()
+      await seneca.ready()
     })
-    // console.log('list2', list2.map((n: any) => ({ ...n })))
-    expect(1 < list2.length).toEqual(true)
 
-    const list3 = await seneca.entity('foo/chunk').list$({
-      directive$: { vector$: { k: 2 } },
-      vector: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1],
-      code: 'code0'
+    test('save and load by id', async () => {
+      const ent = await seneca
+        .entity('foo/bar')
+        .data$({ x: 1, y: 'hello' })
+        .save$()
+
+      expect(ent.id).toBeDefined()
+      expect(ent).toMatchObject({ x: 1, y: 'hello' })
+
+      const loaded = await seneca.entity('foo/bar').load$(ent.id)
+      expect(loaded).toMatchObject({ id: ent.id, x: 1, y: 'hello' })
     })
-    // console.log('list3', list3.map((n: any) => ({ ...n })))
-    expect(list3.length).toEqual(1)
 
-  }, 22222)
+    test('load missing returns null', async () => {
+      const loaded = await seneca.entity('foo/bar').load$('no-such-id')
+      expect(loaded).toEqual(null)
+    })
 
+    test('list all', async () => {
+      await seneca.entity('list/item').data$({ n: 1 }).save$()
+      await seneca.entity('list/item').data$({ n: 2 }).save$()
+      await seneca.entity('list/item').data$({ n: 3 }).save$()
 
+      const list = await seneca.entity('list/item').list$({})
+      expect(list.length).toEqual(3)
+    })
 
+    test('list with field filter', async () => {
+      await seneca.entity('filter/item').data$({ color: 'red' }).save$()
+      await seneca.entity('filter/item').data$({ color: 'blue' }).save$()
+      await seneca.entity('filter/item').data$({ color: 'red' }).save$()
+
+      const list = await seneca.entity('filter/item').list$({ color: 'red' })
+      expect(list.length).toEqual(2)
+      expect(list.every((e: any) => e.color === 'red')).toBe(true)
+    })
+
+    test('list with sort$', async () => {
+      await seneca.entity('sort/item').data$({ n: 3 }).save$()
+      await seneca.entity('sort/item').data$({ n: 1 }).save$()
+      await seneca.entity('sort/item').data$({ n: 2 }).save$()
+
+      const asc = await seneca.entity('sort/item').list$({ sort$: { n: 1 } })
+      const vals = asc.map((e: any) => e.n)
+      expect(vals).toEqual([...vals].sort((a: number, b: number) => a - b))
+
+      const desc = await seneca.entity('sort/item').list$({ sort$: { n: -1 } })
+      const valsDesc = desc.map((e: any) => e.n)
+      expect(valsDesc).toEqual(
+        [...valsDesc].sort((a: number, b: number) => b - a),
+      )
+    })
+
+    test('list with limit$ and skip$', async () => {
+      for (let i = 0; i < 5; i++) {
+        await seneca.entity('page/item').data$({ i }).save$()
+      }
+
+      const page = await seneca
+        .entity('page/item')
+        .list$({ sort$: { i: 1 }, limit$: 2, skip$: 1 })
+      expect(page.length).toEqual(2)
+    })
+
+    test('list with fields$', async () => {
+      const ent = await seneca
+        .entity('foo/bar')
+        .data$({ a: 1, b: 2 })
+        .save$()
+
+      const list = await seneca
+        .entity('foo/bar')
+        .list$({ id: ent.id, fields$: ['a'] })
+
+      expect(list[0].a).toEqual(1)
+      expect(list[0].b).toBeUndefined()
+    })
+
+    test('remove by id', async () => {
+      const ent = await seneca.entity('foo/bar').data$({ x: 99 }).save$()
+
+      await seneca.entity('foo/bar').remove$(ent.id)
+
+      const loaded = await seneca.entity('foo/bar').load$(ent.id)
+      expect(loaded).toEqual(null)
+    })
+
+    test('remove with all$', async () => {
+      await seneca.entity('del/item').data$({ tag: 'x' }).save$()
+      await seneca.entity('del/item').data$({ tag: 'x' }).save$()
+      await seneca.entity('del/item').data$({ tag: 'y' }).save$()
+
+      await seneca.entity('del/item').remove$({ tag: 'x', all$: true })
+
+      const remaining = await seneca.entity('del/item').list$({})
+      expect(remaining.every((e: any) => e.tag !== 'x')).toBe(true)
+    })
+
+    test('update existing entity', async () => {
+      const ent = await seneca.entity('foo/bar').data$({ x: 1 }).save$()
+
+      ent.x = 2
+      const updated = await ent.save$()
+      expect(updated.x).toEqual(2)
+
+      const loaded = await seneca.entity('foo/bar').load$(ent.id)
+      expect(loaded.x).toEqual(2)
+    })
+  })
 })
-
 
 function makeSeneca() {
   return Seneca({ legacy: false })
     .test()
     .use('promisify')
     .use('entity')
-    .use(OpensearchStore, {
-      map: {
-        'foo/chunk': '*'
-      },
-      index: {
-        exact: process.env.SENECA_OPENSEARCH_TEST_INDEX,
-      },
-      opensearch: {
-        node: process.env.SENECA_OPENSEARCH_TEST_NODE,
-      }
-    })
+    .use(CloudflareDOStore, { do: { storage: makeMockStorage() } })
 }
 
+// In-memory mock of DurableObjectStorage for testing without a Worker runtime.
+function makeMockStorage() {
+  const data = new Map<string, any>()
 
-const index_test01 = {
-  "mappings": {
-    "properties": {
-      "text": { "type": "text" },
-      "vector": {
-        "type": "knn_vector",
-        "dimension": 8, // 1536,
-        "method": {
-          "engine": "nmslib",
-          "space_type": "cosinesimil",
-          "name": "hnsw",
-          "parameters": { "ef_construction": 512, "m": 16 }
-        }
+  return {
+    async get(key: string) {
+      return data.get(key)
+    },
+    async put(key: string, value: any) {
+      data.set(key, value)
+    },
+    async delete(key: string) {
+      return data.delete(key)
+    },
+    async list(opts: {
+      prefix?: string
+      limit?: number
+      reverse?: boolean
+    } = {}) {
+      let entries = [...data.entries()]
+      if (opts.prefix) {
+        entries = entries.filter(([k]) => k.startsWith(opts.prefix!))
       }
-    }
-  },
-  "settings": {
-    "index": {
-      "number_of_shards": 2,
-      "knn.algo_param": { "ef_search": 512 },
-      "knn": true
-    }
+      entries.sort(([a], [b]) => a.localeCompare(b))
+      if (opts.reverse) entries.reverse()
+      if (opts.limit) entries = entries.slice(0, opts.limit)
+      return new Map(entries)
+    },
   }
 }
-
-
-/*
-  [
-  {
-    "Rules": [
-      {
-        "Resource": [
-          "collection/podmind03a"
-        ],
-        "Permission": [
-          "aoss:CreateCollectionItems",
-          "aoss:DeleteCollectionItems",
-          "aoss:UpdateCollectionItems",
-          "aoss:DescribeCollectionItems"
-        ],
-        "ResourceType": "collection"
-      },
-      {
-        "Resource": [
-          "index/podmind03a/*"
-        ],
-        "Permission": [
-          "aoss:CreateIndex",
-          "aoss:DeleteIndex",
-          "aoss:UpdateIndex",
-          "aoss:DescribeIndex",
-          "aoss:ReadDocument",
-          "aoss:WriteDocument"
-        ],
-        "ResourceType": "index"
-      }
-    ],
-    "Principal": [
-      "arn:aws:iam::...:role/...LambdaRole..."
-    ],
-    "Description": "Easy data policy"
-  }
-]
-  */

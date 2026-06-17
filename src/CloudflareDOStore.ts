@@ -1,208 +1,125 @@
 /* Copyright (c) 2024 Seneca contributors, MIT License */
 
-import { AwsSigv4Signer } from '@opensearch-project/opensearch/aws'
-import { Client } from '@opensearch-project/opensearch'
-import { defaultProvider } from '@aws-sdk/credential-provider-node'
-
 import { Gubu } from 'gubu'
 
-const { Open, Any } = Gubu
+const { Open, Any, Skip } = Gubu
 
 type Options = {
   debug: boolean
   map?: any
-  index: {
-    prefix: string
-    suffix: string
-    map: Record<string, string>
-    exact: string
-  }
-  field: {
-    zone: { name: string }
-    base: { name: string }
-    name: { name: string }
-    vector: { name: string }
-  }
+  prefix: string
+  suffix: string
+  generate_id?: (ent: any) => string
   cmd: {
     list: {
       size: number
+      maxScan: number
     }
   }
-  aws: any
-  opensearch: any
+  do: any
 }
 
-export type OpensearchStoreOptions = Partial<Options>
+export type CloudflareDOStoreOptions = Partial<Options>
 
-function OpensearchStore(this: any, options: Options) {
+// Minimal subset of DurableObjectStorage this plugin needs.
+type DOStorage = {
+  get<T = any>(key: string): Promise<T | undefined>
+  put<T = any>(key: string, value: T): Promise<void>
+  delete(key: string): Promise<boolean>
+  list<T = any>(opts?: {
+    prefix?: string
+    limit?: number
+    reverse?: boolean
+    start?: string
+    end?: string
+  }): Promise<Map<string, T>>
+}
+
+function CloudflareDOStore(this: any, options: Options) {
   const seneca: any = this
 
   const init = seneca.export('entity/init')
+  const generate_id: (ent: any) => string =
+    options.generate_id || seneca.export('entity/generate_id')
 
-  let desc: any = 'OpensearchStore'
-
-  let client: any
+  let desc: any = 'CloudflareDOStore'
+  let storage: DOStorage
 
   let store = {
-    name: 'OpensearchStore',
+    name: 'CloudflareDOStore',
 
     save: function (this: any, msg: any, reply: any) {
-      // const seneca = this
       const ent = msg.ent
+      const id = null == ent.id ? generate_id(ent) : ent.id
+      const key = resolveKey(ent, id, options)
+      const data = ent.data$(false)
+      data.id = id
 
-      const canon = ent.canon$({ object: true })
-      const index = resolveIndex(ent, options)
-
-      const body = ent.data$(false)
-
-      const fieldOpts: any = options.field
-
-      ;['zone', 'base', 'name'].forEach((n: string) => {
-        if ('' != fieldOpts[n].name && null != canon[n] && '' != canon[n]) {
-          body[fieldOpts[n].name] = canon[n]
-        }
-      })
-
-      const req = {
-        index,
-        body,
-      }
-
-      client
-        .index(req)
-        .then((res: any) => {
-          const body = res.body
-          ent.data$(body._source)
-          ent.id = body._id
-          reply(ent)
+      storage
+        .put(key, JSON.stringify(data))
+        .then(() => {
+          const ento = ent.make$().data$(data)
+          reply(null, ento)
         })
         .catch((err: any) => reply(err))
     },
 
     load: function (this: any, msg: any, reply: any) {
-      // const seneca = this
-      const ent = msg.ent
-
-      // const canon = ent.canon$({ object: true })
-      const index = resolveIndex(ent, options)
-
-      let q = msg.q || {}
+      const qent = msg.qent
+      const q = msg.q || {}
 
       if (null != q.id) {
-        client
-          .get({
-            index,
-            id: q.id,
-          })
-          .then((res: any) => {
-            const body = res.body
-            ent.data$(body._source)
-            ent.id = body._id
-            reply(ent)
-          })
-          .catch((err: any) => {
-            // Not found
-            if (err.meta && 404 === err.meta.statusCode) {
-              reply(null)
-            }
+        const key = resolveKey(qent, q.id, options)
 
-            reply(err)
+        storage
+          .get<string>(key)
+          .then((raw) => {
+            if (null == raw) return reply(null)
+            const ento = qent.make$().data$(JSON.parse(raw))
+            reply(null, ento)
           })
+          .catch((err: any) => reply(err))
       } else {
-        reply()
+        listEntities(qent, { ...q, limit$: 1 }, options, storage)
+          .then((list) => reply(null, list[0] || null))
+          .catch((err: any) => reply(err))
       }
     },
 
-    list: function (msg: any, reply: any) {
-      // const seneca = this
-      const ent = msg.ent
-
-      const index = resolveIndex(ent, options)
-      const query = buildQuery({ index, options, msg })
-
-      // console.log('LISTQ')
-      // console.dir(query, { depth: null })
-
-      if (null == query) {
-        return reply([])
-      }
-
-      client
-        .search(query)
-        .then((res: any) => {
-          const hits = res.body.hits
-          const list = hits.hits.map((entry: any) => {
-            let item = ent.make$().data$(entry._source)
-            item.id = entry._id
-            item.custom$ = { score: entry._score }
-            return item
-          })
-          reply(list)
-        })
-        .catch((err: any) => {
-          reply(err)
-        })
-    },
-
-    // NOTE: all$:true is REQUIRED for deleteByQuery
-    remove: function (this: any, msg: any, reply: any) {
-      // const seneca = this
-      const ent = msg.ent
-
-      const index = resolveIndex(ent, options)
-
+    list: function (this: any, msg: any, reply: any) {
+      const qent = msg.qent
       const q = msg.q || {}
-      let id = q.id
-      let query
 
-      if (null == id) {
-        query = buildQuery({ index, options, msg })
+      listEntities(qent, q, options, storage)
+        .then((list) => reply(null, list))
+        .catch((err: any) => reply(err))
+    },
 
-        if (null == query || true !== q.all$) {
-          return reply(null)
-        }
+    remove: function (this: any, msg: any, reply: any) {
+      const ent = msg.ent || msg.qent
+      const q = msg.q || {}
+
+      if (null != q.id) {
+        storage
+          .delete(resolveKey(ent, q.id, options))
+          .then(() => reply())
+          .catch((err: any) => reply(err))
+        return
       }
 
-      // console.log('REMOVE', id)
-      // console.dir(query, { depth: null })
+      const all = true === q.all$
+      const limit$ = all ? options.cmd.list.maxScan : 1
 
-      if (null != id) {
-        client
-          .delete({
-            index,
-            id,
-            // refresh: true,
-          })
-          .then((_res: any) => {
-            reply(null)
-          })
-          .catch((err: any) => {
-            // Not found
-            if (err.meta && 404 === err.meta.statusCode) {
-              return reply(null)
-            }
-
-            reply(err)
-          })
-      } else if (null != query && true === q.all$) {
-        client
-          .deleteByQuery({
-            index,
-            body: {
-              query,
-            },
-            // refresh: true,
-          })
-          .then((_res: any) => {
-            reply(null)
-          })
-          .catch((err: any) => {
-            // console.log('REM ERR', err)
-            reply(err)
-          })
-      } else {
-        reply(null)
-      }
+      listEntities(ent, { ...q, limit$ }, options, storage)
+        .then((list) =>
+          Promise.all(
+            list.map((item: any) =>
+              storage.delete(resolveKey(ent, item.id, options)),
+            ),
+          ),
+        )
+        .then(() => reply())
+        .catch((err: any) => reply(err))
     },
 
     close: function (this: any, _msg: any, reply: any) {
@@ -210,11 +127,8 @@ function OpensearchStore(this: any, options: Options) {
       reply()
     },
 
-    // TODO: obsolete - remove from seneca entity
     native: function (this: any, _msg: any, reply: any) {
-      reply(null, {
-        client: () => client,
-      })
+      reply(null, { storage: () => storage })
     },
   }
 
@@ -222,157 +136,113 @@ function OpensearchStore(this: any, options: Options) {
 
   desc = meta.desc
 
-  seneca.prepare(async function (this: any) {
-    const region = options.aws.region
-    const node = options.opensearch.node
-
-    client = new Client({
-      ...AwsSigv4Signer({
-        region,
-        service: 'aoss',
-        getCredentials: () => {
-          const credentialsProvider = defaultProvider()
-          return credentialsProvider()
-        },
-      }),
-      node,
-    })
-  })
+  seneca.add(
+    { init: store.name, tag: meta.tag },
+    function (this: any, _msg: any, reply: any) {
+      storage = options.do?.storage
+      reply()
+    },
+  )
 
   return {
     name: store.name,
     tag: meta.tag,
-    exportmap: {
-      native: () => {
-        return { client }
-      },
+    exports: {
+      native: () => ({ storage }),
     },
   }
 }
 
-function buildQuery(spec: { index: string; options: any; msg: any }) {
-  const { index, options, msg } = spec
+function resolveKeyPrefix(ent: any, options: Options): string {
+  const canonstr = ent.canon$({ string: true })
 
-  const q = msg.q || {}
-
-  let query: any = {
-    index,
-    body: {
-      size: msg.size$ || options.cmd.list.size,
-      _source: {
-        excludes: [options.field.vector.name].filter((n) => '' !== n),
-      },
-      query: {},
-    },
+  const map = options.map || {}
+  if (null != map[canonstr] && '' !== map[canonstr]) {
+    return map[canonstr]
   }
 
-  let excludeKeys: any = { vector: 1 }
-
-  const parts = []
-
-  for (let k in q) {
-    if (!excludeKeys[k] && !k.match(/\$/)) {
-      parts.push({
-        match: { [k]: q[k] },
-      })
-    }
-  }
-
-  const vector$ = msg.vector$ || q.directive$?.vector$
-  if (vector$) {
-    parts.push({
-      knn: {
-        vector: {
-          vector: q.vector,
-          k: null == vector$.k ? 11 : vector$.k,
-        },
-      },
-    })
-  }
-
-  if (0 === parts.length) {
-    query = null
-  } else if (1 === parts.length) {
-    query.body.query = parts[0]
-  } else {
-    query.body.query = {
-      bool: {
-        must: parts,
-      },
-    }
-  }
-
-  return query
-}
-
-function resolveIndex(ent: any, options: Options) {
-  let indexOpts = options.index
-  if ('' != indexOpts.exact && null != indexOpts.exact) {
-    return indexOpts.exact
-  }
-
-  let canonstr = ent.canon$({ string: true })
-  indexOpts.map = indexOpts.map || {}
-  if ('' != indexOpts.map[canonstr] && null != indexOpts.map[canonstr]) {
-    return indexOpts.map[canonstr]
-  }
-
-  let prefix = indexOpts.prefix
-  let suffix = indexOpts.suffix
-
-  prefix = '' == prefix || null == prefix ? '' : prefix + '_'
-  suffix = '' == suffix || null == suffix ? '' : '_' + suffix
-
-  // TOOD: need ent.canon$({ external: true }) : foo/bar -> foo_bar
-  let infix = ent
-    .canon$({ string: true })
-    .replace(/-\//g, '')
-    .replace(/\//g, '_')
+  const prefix = options.prefix ? options.prefix + '/' : ''
+  const suffix = options.suffix ? '/' + options.suffix : ''
+  const infix = canonstr.replace(/-\//g, '')
 
   return prefix + infix + suffix
 }
 
-// Default options.
+function resolveKey(ent: any, id: string, options: Options): string {
+  return resolveKeyPrefix(ent, options) + '/' + id
+}
+
+async function listEntities(
+  ent: any,
+  q: any,
+  options: Options,
+  storage: DOStorage,
+): Promise<any[]> {
+  const prefix = resolveKeyPrefix(ent, options) + '/'
+  const maxScan = options.cmd.list.maxScan
+
+  const map = await storage.list<string>({ prefix, limit: maxScan })
+
+  let list: any[] = []
+  for (const raw of map.values()) {
+    const data = JSON.parse(raw)
+    list.push(data)
+  }
+
+  for (const field of Object.keys(q)) {
+    if (field.endsWith('$')) continue
+    list = list.filter((item) => item[field] === q[field])
+  }
+
+  if (q.sort$) {
+    const [field, dir] = Object.entries(q.sort$)[0]
+    list = list.slice().sort((a, b) => {
+      if (a[field] === b[field]) return 0
+      const order = a[field] < b[field] ? -1 : 1
+      return (dir as number) < 0 ? -order : order
+    })
+  }
+
+  const skip = q.skip$ || 0
+  const limit = null == q.limit$ ? options.cmd.list.size : q.limit$
+  list = list.slice(skip, skip + limit)
+
+  if (Array.isArray(q.fields$)) {
+    list = list.map((item) => {
+      const picked: any = { id: item.id }
+      for (const f of q.fields$) picked[f] = item[f]
+      return picked
+    })
+  }
+
+  return list.map((data) => ent.make$().data$(data))
+}
+
 const defaults: Options = {
   debug: false,
   map: Any(),
-  index: {
-    prefix: '',
-    suffix: '',
-    map: {},
-    exact: '',
-  },
-
-  // '' === name => do not inject
-  field: {
-    zone: { name: 'zone' },
-    base: { name: 'base' },
-    name: { name: 'name' },
-    vector: { name: 'vector' },
-  },
+  prefix: '',
+  suffix: '',
 
   cmd: {
     list: {
       size: 11,
+      maxScan: 1000,
     },
   },
 
-  aws: Open({
-    region: 'us-east-1',
-  }),
-
-  opensearch: Open({
-    node: 'NODE-URL',
+  do: Open({
+    storage: Skip(Any()),
   }),
 }
 
-Object.assign(OpensearchStore, {
+Object.assign(CloudflareDOStore, {
   defaults,
-  utils: { resolveIndex },
+  utils: { resolveKeyPrefix, resolveKey },
 })
 
-export default OpensearchStore
+export default CloudflareDOStore
 
 if ('undefined' !== typeof module) {
-  module.exports = OpensearchStore
+  module.exports = CloudflareDOStore
 }
