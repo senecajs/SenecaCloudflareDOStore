@@ -16,6 +16,7 @@
     "test-watch": "jest --coverage --watchAll",
     "watch": "tsc -w -d",
     "build": "tsc -d",
+    "prepare": "tsc -d",
     "doc": "seneca-doc -p seneca-entity",
     "prettier": "prettier --write --no-semi --single-quote src/**/*.ts test/**/*.ts",
     "reset": "npm run clean && npm i && npm run build && npm test",
