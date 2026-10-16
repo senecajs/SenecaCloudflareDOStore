@@ -1,6 +1,6 @@
 {
   "name": "@seneca/cloudflare-do-store",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Seneca Cloudflare Durable Objects Store data storage plugin.",
   "main": "dist/CloudflareDOStore.js",
   "type": "commonjs",
@@ -64,5 +64,12 @@
     "src",
     "dist"
   ],
-  "dependencies": {}
+  "dependencies": {},
+  "engines": {
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
 }
