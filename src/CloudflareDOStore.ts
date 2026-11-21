@@ -1,15 +1,11 @@
 /* Copyright (c) 2024 Seneca contributors, MIT License */
 
-import { Gubu } from 'gubu'
-
-const { Open, Any, Skip } = Gubu
-
 type Options = {
   debug: boolean
   map?: any
   prefix: string
   suffix: string
-  generate_id?: (ent: any) => string
+  generate_id: (ent: any) => string | undefined
   cmd: {
     list: {
       size: number
@@ -39,8 +35,13 @@ function CloudflareDOStore(this: any, options: Options) {
   const seneca: any = this
 
   const init = seneca.export('entity/init')
-  const generate_id: (ent: any) => string =
-    options.generate_id || seneca.export('entity/generate_id')
+  const entity_generate_id: (ent: any) => string =
+    seneca.export('entity/generate_id')
+
+  // The default generate_id option returns undefined: use the generator of
+  // the entity plugin.
+  const generate_id = (ent: any): string =>
+    options.generate_id(ent) ?? entity_generate_id(ent)
 
   let desc: any = 'CloudflareDOStore'
   let storage: DOStorage
@@ -136,13 +137,10 @@ function CloudflareDOStore(this: any, options: Options) {
 
   desc = meta.desc
 
-  seneca.add(
-    { init: store.name, tag: meta.tag },
-    function (this: any, _msg: any, reply: any) {
-      storage = options.do?.storage
-      reply()
-    },
-  )
+  seneca.init(function (this: any, reply: any) {
+    storage = options.do?.storage
+    reply()
+  })
 
   return {
     name: store.name,
@@ -218,11 +216,18 @@ async function listEntities(
   return list.map((data) => ent.make$().data$(data))
 }
 
-const defaults: Options = {
+// The option shape is built with the builders that Seneca passes in
+// `valid`. Seneca 4 rejects defaults built with Gubu.
+const defaults = ({ valid }: { valid: any }) => ({
   debug: false,
-  map: Any(),
+  map: valid.Any(),
   prefix: '',
   suffix: '',
+
+  // Returns undefined to use the id generator of the entity plugin.
+  generate_id: function generate_id(_ent: any): string | undefined {
+    return undefined
+  },
 
   cmd: {
     list: {
@@ -231,10 +236,10 @@ const defaults: Options = {
     },
   },
 
-  do: Open({
-    storage: Skip(Any()),
+  do: valid.Open({
+    storage: valid.Skip(valid.Any()),
   }),
-}
+})
 
 Object.assign(CloudflareDOStore, {
   defaults,

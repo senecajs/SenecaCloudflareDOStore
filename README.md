@@ -18,8 +18,10 @@ Durable Objects give each object instance its own persistent, strongly-consisten
 ## Install
 
 ```sh
-npm install @seneca/cloudflare-do-store
+npm install seneca@^4 @seneca/entity @seneca/cloudflare-do-store
 ```
+
+Needs Seneca 4, `@seneca/entity` 29 and Node.js 24 or later.
 
 ## Usage
 
@@ -32,8 +34,7 @@ import CloudflareDOStore from '@seneca/cloudflare-do-store'
 export class MyDO {
   constructor(ctx, env) {
     this.seneca = Seneca({ legacy: false })
-      .use('promisify')
-      .use('entity')
+      .use('@seneca/entity')
       .use(CloudflareDOStore, {
         do: { storage: ctx.storage },
       })
@@ -51,6 +52,7 @@ export class MyDO {
 | `map` | `{}` | Custom key prefix overrides per entity canon string |
 | `cmd.list.size` | `11` | Default page size for `list$` |
 | `cmd.list.maxScan` | `1000` | Maximum entries scanned per `list$` or `remove$ all$` |
+| `generate_id` | returns `undefined` | Function `(ent) => id` for new entities. When it returns `undefined`, the entity plugin generates the id |
 
 ## Key scheme
 
@@ -95,6 +97,10 @@ const page = await seneca.entity('foo/bar').list$({
   fields$: ['id', 'name'],
 })
 ```
+
+## Seneca compatibility
+
+Supports Seneca **4.x**, with `@seneca/entity` 29.x.
 
 ## Native driver
 
